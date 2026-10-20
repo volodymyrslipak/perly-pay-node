@@ -1,0 +1,59 @@
+{
+  "name": "perly-pay",
+  "version": "0.1.0",
+  "description": "Perly Pay's server SDK: crypto payments straight to your wallet. Zero dependencies, fetch-based, typed.",
+  "license": "MIT",
+  "author": "Perly (https://pay.perly.io)",
+  "homepage": "https://pay.perly.io/docs/sdks",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volodymyrslipak/perly-pay-node.git"
+  },
+  "bugs": {
+    "url": "https://github.com/volodymyrslipak/perly-pay-node/issues"
+  },
+  "keywords": [
+    "perly",
+    "perly-pay",
+    "payments",
+    "crypto",
+    "bitcoin",
+    "usdc",
+    "usdt",
+    "stablecoin",
+    "checkout",
+    "webhooks",
+    "non-custodial",
+    "sdk"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "perly-pay": "./dist/cli/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json && tsc -p tsconfig.cli.json",
+    "prepack": "npm run build"
+  }
+}
