@@ -34,7 +34,7 @@ Options
   --force                 replace files and values that are already there
   --plugin                print how to add the Claude Code plugin
   --mcp                   print the MCP server config (${"perly-pay-mcp"})
-  --api <origin>          Perly Pay's address (default ${DEFAULT_API})
+  --api <origin>          Perly Pay's address (default ${DEFAULT_API}; plain http only for localhost)
   --dir <path>            the project (default: here)
   --dry-run               say what would happen, write nothing
   --json                  print the result as JSON

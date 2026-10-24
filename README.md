@@ -198,7 +198,7 @@ Add your site's origin under Dashboard → Settings → Checkout so the checkout
 
 - Docs: <https://pay.perly.io/docs> · API reference: <https://pay.perly.io/docs/api> · SDKs: <https://pay.perly.io/docs/sdks>
 - OpenAPI: <https://pay.perly.io/api/v1/openapi.json>
-- PHP: [`perly/perly-pay`](https://pay.perly.io/docs/sdks) on Composer, the same calls and the same webhook check
+- PHP: [`perly/perly-pay`](https://pay.perly.io/docs/sdks), the same calls and the same webhook check, is not on Packagist yet; until then PHP calls the API directly, and `npx perly-pay init` in a Laravel project writes files that do (Laravel's HTTP client and the signature check written out)
 
 ## Build
 

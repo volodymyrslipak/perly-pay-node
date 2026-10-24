@@ -6,8 +6,9 @@
  * Everything outside the disk goes through `InitIO`, so the tests drive
  * it without a terminal, a browser or a network.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { PerlyPay } from "../index.js";
 import { PerlyPayError } from "../errors.js";
 import { DetectError, FRAMEWORK_NAMES, detectProject, installCommand, type Framework, type Project } from "./detect.js";
@@ -16,6 +17,7 @@ import {
   DEFAULT_API,
   KEY_VAR,
   WEBHOOK_SECRET_VAR,
+  checkApiOrigin,
   checkTestKey,
   ensureIgnored,
   maskKey,
@@ -58,6 +60,8 @@ export interface InitIO {
   openUrl(url: string): void;
   /** Runs a shell command in `cwd`; the exit status. Only for --install. */
   run(command: string, cwd: string): number;
+  /** Whether git tracks `path` (relative) in `dir`. Default: asks git; false outside a repository or without git. */
+  tracked?(dir: string, path: string): boolean;
   fetch?: typeof fetch;
 }
 
@@ -145,6 +149,43 @@ async function registerWebhook(
   return { endpoint: made.id, secret: made.secret ?? null, how: "created" };
 }
 
+/** Whether git tracks the file: `git ls-files --error-unmatch` (no shell). Outside a repository, or without git, it does not. */
+export function trackedByGit(dir: string, path: string): boolean {
+  try {
+    return spawnSync("git", ["ls-files", "--error-unmatch", "--", path], { cwd: dir, stdio: "ignore", timeout: 10_000 }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why init must not write `rel` in `root`, or null: it is a symbolic link, or a
+ * linked folder above it leads out of the project. init writes only real files
+ * inside the project, so a cloned repository's links cannot aim it elsewhere.
+ */
+function unsafeTarget(root: string, rel: string): string | null {
+  const target = join(root, rel);
+  try {
+    if (lstatSync(target).isSymbolicLink()) return `${rel} is a symbolic link`;
+  } catch {
+    // Not there yet: its folder decides.
+  }
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return null;
+  }
+  for (let dir = dirname(target); ; dir = dirname(dir)) {
+    try {
+      const real = realpathSync(dir);
+      return real === rootReal || real.startsWith(rootReal + sep) ? null : `${rel} would land outside the project, through a linked folder`;
+    } catch {
+      if (dirname(dir) === dir) return null;
+    }
+  }
+}
+
 function language(project: Project): "typescript" | "javascript" | "php" {
   return project.framework === "laravel" ? "php" : project.style === "ts" ? "typescript" : "javascript";
 }
@@ -165,8 +206,8 @@ export async function init(options: InitOptions, io: InitIO): Promise<InitResult
 }
 
 async function run(options: InitOptions, io: InitIO, result: InitResult): Promise<void> {
-  const api = (options.api ?? DEFAULT_API).replace(/\/+$/, "");
-  if (!/^https?:\/\/[^/]+$/.test(api)) throw new InitError(`--api takes an origin, like ${DEFAULT_API} or http://localhost:3200.`);
+  const api = checkApiOrigin(options.api ?? DEFAULT_API);
+  if (!api) throw new InitError(`--api takes an origin, like ${DEFAULT_API}: https, or plain http only for localhost (http://localhost:3200). The key is sent there.`);
   const developersUrl = `${api}/dashboard/developers`;
   const offer = options.offer ?? DEFAULT_OFFER;
   const project = detectProject(options.dir, options.framework);
@@ -182,6 +223,27 @@ async function run(options: InitOptions, io: InitIO, result: InitResult): Promis
   const envText = readText(envPath) ?? "";
   const { key, source } = await resolveKey(options, io, envText, developersUrl);
   result.key = key ? "set" : "placeholder";
+
+  // Nothing written yet: refuse a target that is a link, or a keys file git would commit.
+  const unsafe = [
+    project.envFile,
+    ".gitignore",
+    ...plan.files.filter((f) => options.force || readText(join(project.dir, f.path)) === null).map((f) => f.path),
+  ]
+    .map((rel) => unsafeTarget(project.dir, rel))
+    .filter((why): why is string => why !== null);
+  if (unsafe.length) {
+    throw new InitError(`init writes only real files inside the project: ${unsafe.join("; ")}. Replace the link with a real file or folder, then run init again.`);
+  }
+  const writesSecret = !!options.webhookUrl || source === "--key" || source === "pasted";
+  if ((io.tracked ?? trackedByGit)(project.dir, project.envFile)) {
+    if (writesSecret) {
+      throw new InitError(
+        `${project.envFile} is tracked by git, so a key written there would be committed with it. Untrack it first: git rm --cached ${project.envFile} (the file stays on disk, and .gitignore then keeps it out). Then run init again.`,
+      );
+    }
+    result.notes.push(`${project.envFile} is tracked by git: keep keys out of it until it is untracked (git rm --cached ${project.envFile}).`);
+  }
 
   // The network first: if Perly Pay refuses the endpoint, nothing has been written yet.
   let webhookSecret: string | null = null;
@@ -229,8 +291,8 @@ async function run(options: InitOptions, io: InitIO, result: InitResult): Promis
   if (ignored !== null && !options.dryRun) writeFileSync(gitignorePath, ignored);
 
   const next = result.next;
-  if (!project.hasSdk) {
-    const command = installCommand(project);
+  const command = project.hasSdk ? null : installCommand(project);
+  if (command) {
     if (options.install && !options.dryRun) {
       const status = io.run(command, project.dir);
       result.install = { command, ran: true, status };

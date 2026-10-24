@@ -172,10 +172,15 @@ export function detectProject(dir: string, forced?: Framework): Project {
   };
 }
 
-export function installCommand(project: Pick<Project, "packageManager">): string {
+/**
+ * What to run to install the SDK, or null when there is nothing to: the
+ * Laravel files call the API with Laravel's own HTTP client and check the
+ * signature themselves, since perly/perly-pay is not on Packagist yet.
+ */
+export function installCommand(project: Pick<Project, "packageManager">): string | null {
   switch (project.packageManager) {
     case "composer":
-      return "composer require perly/perly-pay";
+      return null;
     case "pnpm":
       return "pnpm add perly-pay";
     case "yarn":

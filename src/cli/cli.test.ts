@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,11 @@ import { planFiles, type GeneratedFile } from "./templates";
 const TEST_KEY = "sk_test_kestrelLOCALdevONLYkey0000000000";
 // Built from parts so secret scanners do not take this made-up key for a real one.
 const LIVE_KEY = ["sk", "live", "kestrelLOCALdevONLYkey0000000000"].join("_");
+// The gate runs inside git's pre-push hook, where GIT_DIR (and friends) name the repository being
+// pushed: the git calls here, and init's own `git ls-files`, must act on their temporary project only,
+// or `git init`/`commit` lands a commit on the branch being pushed.
+for (const name of Object.keys(process.env)) if (name.startsWith("GIT_")) delete process.env[name];
+
 const sdkSrc = fileURLToPath(new URL("../index.ts", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 
@@ -121,7 +127,8 @@ describe("detecting the project", () => {
   it("knows when the SDK is already there, and how to install it", () => {
     expect(detectProject(fixture({ "package.json": { dependencies: { express: "5", "perly-pay": "0.1.0" } } })).hasSdk).toBe(true);
     expect(installCommand({ packageManager: "pnpm" })).toBe("pnpm add perly-pay");
-    expect(installCommand({ packageManager: "composer" })).toBe("composer require perly/perly-pay");
+    // Nothing to install for Laravel: perly/perly-pay is not on Packagist yet, and its files speak plain HTTP.
+    expect(installCommand({ packageManager: "composer" })).toBeNull();
   });
 });
 
@@ -284,6 +291,58 @@ describe("init", () => {
     expect(read(dir, ".env")).toContain("PERLY_PAY_WEBHOOK_SECRET=whsec_fresh");
   });
 
+  it("refuses to write a key into a keys file git tracks, before anything is sent or written (SUPPLY3-02)", async () => {
+    const dir = fixture({ ...FIXTURES.expressEsmYarn, ".env": "PORT=3000\n" });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git("init", "-q");
+    git("add", ".");
+    git("-c", "user.email=t@t.test", "-c", "user.name=t", "commit", "-qm", "init");
+    const sent: string[] = [];
+    const io = fakeIO({ fetch: (async (input: RequestInfo | URL) => (sent.push(String(input)), new Response("{}"))) as typeof fetch });
+    const { result } = await run(dir, { key: TEST_KEY, api: "http://localhost:3273", webhookUrl: "http://localhost:4567/perly-pay/webhook" }, io);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/\.env is tracked by git[\s\S]*git rm --cached \.env/);
+    expect(read(dir, ".env")).toBe("PORT=3000\n");
+    expect(existsSync(join(dir, "lib"))).toBe(false);
+    expect(sent).toEqual([]);
+
+    // Without a secret to write it goes ahead, and says so.
+    const plain = await run(dir, {}, fakeIO());
+    expect(plain.result.ok).toBe(true);
+    expect(plain.result.notes.join(" ")).toMatch(/\.env is tracked by git/);
+    expect(read(dir, ".env")).not.toMatch(/sk_test_[A-Za-z0-9]{8}/);
+  });
+
+  it("writes only real files inside the project, never through a symbolic link (SUPPLY3-04)", async () => {
+    const outside = fixture({ "victim.txt": "keep me\n" });
+    const dir = fixture(FIXTURES.expressEsmYarn);
+    symlinkSync(join(outside, "victim.txt"), join(dir, ".env"));
+    const viaFile = await run(dir, { key: TEST_KEY });
+    expect(viaFile.result.error).toMatch(/\.env is a symbolic link/);
+    expect(read(outside, "victim.txt")).toBe("keep me\n");
+
+    const dir2 = fixture(FIXTURES.expressEsmYarn);
+    symlinkSync(outside, join(dir2, "lib"));
+    const viaFolder = await run(dir2, { key: TEST_KEY, force: true });
+    expect(viaFolder.result.error).toMatch(/lib\/perly-pay\.js would land outside the project/);
+    expect(existsSync(join(outside, "perly-pay.js"))).toBe(false);
+    expect(existsSync(join(dir2, ".env"))).toBe(false);
+  });
+
+  it("sends the key only over https, or plain http to this machine (SUPPLY3-03)", async () => {
+    for (const api of ["http://pay.example.com", "https://pay.perly.io@evil.example", "http://localhost.evil.example", "http://127.0.0.1.nip.io", "https://pay.perly.io/x", "https://pay.perly.io?x=1", "ftp://pay.perly.io"]) {
+      const sent: string[] = [];
+      const io = fakeIO({ fetch: (async (input: RequestInfo | URL) => (sent.push(String(input)), new Response("{}"))) as typeof fetch });
+      const { result } = await run(fixture(FIXTURES.node), { key: TEST_KEY, api, webhookUrl: "https://x.example/perly-pay/webhook" }, io);
+      expect(result.error, api).toMatch(/--api takes an origin/);
+      expect(sent, api).toEqual([]);
+    }
+    for (const api of ["https://pay.perly.io/", "http://localhost:3273", "http://127.0.0.1:3200", "http://[::1]:3200", "http://pay.localhost:3200"]) {
+      const { result } = await run(fixture(FIXTURES.node), { api }, fakeIO());
+      expect(result.ok, api).toBe(true);
+    }
+  });
+
   it("--webhook-url needs a key", async () => {
     const { result } = await run(fixture(FIXTURES.expressEsmYarn), { webhookUrl: "https://x.example/perly-pay/webhook" });
     expect(result.error).toMatch(/needs a test key/);
@@ -315,7 +374,7 @@ describe("init", () => {
     expect(next).not.toContain(TEST_KEY);
   });
 
-  it("writes Laravel's controller, routes, config and view, for composer", async () => {
+  it("writes Laravel's controller, routes, config and view, with nothing to install", async () => {
     const dir = fixture(FIXTURES.laravel);
     const { result } = await run(dir, { key: TEST_KEY, offer: { product: "O'Brien's audit", amount: 15000, currency: "EUR" } });
     expect(result.files.map((f) => f.path)).toEqual([
@@ -326,11 +385,19 @@ describe("init", () => {
     ]);
     const controller = read(dir, "app/Http/Controllers/PerlyPayController.php");
     expect(controller).toContain(`'description' => 'O\\'Brien\\'s audit', 'amount' => 15000, 'currency' => 'EUR'`);
-    expect(controller).toContain("Webhook::verify($request->getContent()");
+    // Laravel's own HTTP client and the signature check written out: no SDK to require.
+    expect(controller).not.toContain("Perly\\Pay");
+    expect(controller).toContain("Http::withToken((string) config('perly-pay.secret_key'))");
+    expect(controller).toContain("'Idempotency-Key' => (string) Str::uuid()");
+    expect(controller).toContain("$this->verify($request->getContent(), $request->header('Perly-Signature'), $secret)");
+    expect(controller).toContain("hash_hmac('sha256', $timestamp.'.'.$payload, $secret)");
+    expect(controller).toContain("preg_match('/^\\d{1,12}$/', $value)");
     expect(controller).toContain("TODO: grant access");
+    expect(read(dir, "config/perly-pay.php")).toContain("env('PERLY_PAY_API', 'https://pay.perly.io')");
     expect(read(dir, "routes/perly-pay.php")).toContain("withoutMiddleware");
     expect(read(dir, "resources/views/perly-pay/button.blade.php")).toContain("@csrf");
-    expect(result.next.join("\n")).toContain("composer require perly/perly-pay");
+    expect(result.install).toBeUndefined();
+    expect(result.next.join("\n")).not.toContain("composer require");
     expect(result.next.join("\n")).toContain("require __DIR__.'/perly-pay.php';");
     expect(read(dir, ".env")).toContain(`PERLY_PAY_SECRET_KEY=${TEST_KEY}`);
   });

@@ -1,6 +1,6 @@
 {
   "name": "perly-pay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Perly Pay's server SDK: crypto payments straight to your wallet. Zero dependencies, fetch-based, typed.",
   "license": "MIT",
   "author": "Perly (https://pay.perly.io)",

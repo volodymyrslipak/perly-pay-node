@@ -6,7 +6,7 @@
  */
 import { ConnectionError, PerlyPayError } from "./errors.js";
 
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = "0.1.1";
 
 export interface HttpOptions {
   /** Empty for the public endpoints (license checks from your app). */

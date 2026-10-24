@@ -8,6 +8,28 @@ export const WEBHOOK_SECRET_VAR = "PERLY_PAY_WEBHOOK_SECRET";
 export const API_VAR = "PERLY_PAY_API";
 export const DEFAULT_API = "https://pay.perly.io";
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * `--api` as an origin, or null. https, or plain http only to this machine
+ * (as perly-pay-mcp's PERLY_PAY_API): init sends the key there, and a key
+ * never crosses a network unencrypted. No user name, path, query or fragment,
+ * so `https://pay.perly.io@evil.example` cannot pass for Perly Pay.
+ */
+export function checkApiOrigin(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim().replace(/\/+$/, ""));
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") return null;
+  if (/[@?#\\]/.test(raw.trim().replace(/^https?:\/\//i, ""))) return null;
+  const local = LOCAL_HOSTS.has(url.hostname) || url.hostname.endsWith(".localhost");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) return null;
+  return url.origin;
+}
+
 const line = (name: string) => new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}[ \\t]*=(.*)$`, "m");
 
 /** A variable's value in a dotenv file ("" when set empty), or null when absent. Quotes and a trailing comment are dropped. */

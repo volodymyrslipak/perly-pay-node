@@ -427,7 +427,9 @@ ${s === "cjs" ? "\nmodule.exports = { perlyPayHandler };\n" : ""}`;
   };
 }
 
-// ── Laravel (PHP SDK) ─────────────────────────────────────────────
+// ── Laravel (plain HTTP) ──────────────────────────────────────────
+// Laravel's own HTTP client (Guzzle underneath, already in every Laravel app) and the signature check
+// written out: nothing to install, so the files work before perly/perly-pay is on Packagist.
 
 const php = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
@@ -438,20 +440,21 @@ function laravelFiles(offer: Offer): Plan {
 return [
     'secret_key' => env('${KEY_VAR}'),
     'webhook_secret' => env('${WEBHOOK_SECRET_VAR}'),
-    'api' => env('${API_VAR}'),
+    'api' => env('${API_VAR}', 'https://pay.perly.io'),
 ];
 `;
   const controller = `<?php
 
 namespace App\\Http\\Controllers;
 
+use Illuminate\\Http\\Client\\RequestException;
 use Illuminate\\Http\\Request;
-use Perly\\Pay\\Exception\\SignatureVerificationException;
-use Perly\\Pay\\PerlyPay;
-use Perly\\Pay\\Webhook;
+use Illuminate\\Support\\Facades\\Http;
+use Illuminate\\Support\\Str;
 
 /**
  * Perly Pay: crypto payments straight to your wallet.
+ * Calls the REST API with Laravel's HTTP client: https://pay.perly.io/docs/api
  * ${HEADER}
  */
 class PerlyPayController extends Controller
@@ -461,6 +464,9 @@ class PerlyPayController extends Controller
         'one_off' => ['description' => ${php(offer.product)}, 'amount' => ${offer.amount}, 'currency' => '${offer.currency}', 'credits' => 0], // ${formatAmount(offer)}
         'credits_100' => ['description' => '100 credits', 'amount' => 1000, 'currency' => '${offer.currency}', 'credits' => 100],
     ];
+
+    /** How old a webhook's signature may be, in seconds. */
+    private const TOLERANCE = 300;
 
     /** Try it: a page with the button. */
     public function button()
@@ -480,13 +486,21 @@ class PerlyPayController extends Controller
         if ($request->filled('user')) {
             $metadata['user'] = (string) $request->input('user');
         }
-        $invoice = $this->client()->invoices->create([
-            'amount' => $plan['amount'],
-            'currency' => $plan['currency'],
-            'description' => $plan['description'],
-            'return_url' => url('/'),
-            'metadata' => $metadata,
-        ]);
+        $invoice = Http::withToken((string) config('perly-pay.secret_key'))
+            ->acceptJson()
+            // The same key on a retry opens the same invoice, never a second one.
+            ->withHeaders(['Idempotency-Key' => (string) Str::uuid()])
+            // A dropped connection, 429 or 5xx is tried again (twice); anything else is the answer.
+            ->retry(2, 500, fn ($e) => ! $e instanceof RequestException || $e->response->status() === 429 || $e->response->serverError(), throw: false)
+            ->post(rtrim((string) config('perly-pay.api'), '/').'/api/v1/invoices', [
+                'amount' => $plan['amount'],
+                'currency' => $plan['currency'],
+                'description' => $plan['description'],
+                'return_url' => url('/'),
+                'metadata' => $metadata,
+            ])
+            ->throw()
+            ->json();
 
         return redirect()->away($invoice['url'], 303);
     }
@@ -498,11 +512,10 @@ class PerlyPayController extends Controller
         if ($secret === '') {
             return response('${WEBHOOK_SECRET_VAR} is not set.', 500);
         }
-        try {
-            // The RAW body, not the parsed request.
-            $event = Webhook::verify($request->getContent(), $request->header('Perly-Signature'), $secret);
-        } catch (SignatureVerificationException $e) {
-            return response($e->getMessage(), 400);
+        // The RAW body, not the parsed request.
+        $event = $this->verify($request->getContent(), $request->header('Perly-Signature'), $secret);
+        if ($event === null) {
+            return response('Bad signature.', 400);
         }
         if (($event['type'] ?? '') === 'invoice.fulfilled') {
             $this->grantAccess($event['data']['object']);
@@ -522,11 +535,33 @@ class PerlyPayController extends Controller
         logger()->info('[perly-pay] '.$invoice['id'].' fulfilled', $meta);
     }
 
-    private function client(): PerlyPay
+    /**
+     * Perly-Signature is "t=<unix seconds>,v1=<hex>", v1 = HMAC-SHA256(secret, t.".".body).
+     * The event when a v1 matches and t is under five minutes old; null otherwise.
+     */
+    private function verify(string $payload, ?string $header, string $secret): ?array
     {
-        $api = config('perly-pay.api');
+        $timestamp = null;
+        $signatures = [];
+        foreach (explode(',', (string) $header) as $part) {
+            [$key, $value] = array_pad(explode('=', trim($part), 2), 2, '');
+            if ($key === 't' && preg_match('/^\\d{1,12}$/', $value) === 1) {
+                $timestamp = (int) $value;
+            } elseif ($key === 'v1' && preg_match('/^[0-9a-fA-F]{64}$/', $value) === 1) {
+                $signatures[] = strtolower($value);
+            }
+        }
+        if ($timestamp === null || $signatures === [] || abs(time() - $timestamp) > self::TOLERANCE) {
+            return null;
+        }
+        $expected = hash_hmac('sha256', $timestamp.'.'.$payload, $secret);
+        $matched = false;
+        foreach ($signatures as $signature) {
+            $matched = hash_equals($expected, $signature) || $matched;
+        }
+        $event = $matched ? json_decode($payload, true) : null;
 
-        return new PerlyPay((string) config('perly-pay.secret_key'), $api ? ['base_url' => $api] : []);
+        return is_array($event) ? $event : null;
     }
 }
 `;
