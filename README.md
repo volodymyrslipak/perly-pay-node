@@ -1,7 +1,8 @@
 # perly-pay
 
 Crypto payments straight to your wallet — bitcoin and dollar stablecoins,
-0% of volume. The server SDK for the [Perly Pay API](https://pay.perly.io/docs/api).
+2.5¢ a payment, nothing taken from it, and a month of up to 21 payments is free.
+The server SDK for the [Perly Pay API](https://pay.perly.io/docs/api).
 
 - TypeScript, **zero dependencies**, plain `fetch` (Node 18+, Deno, Bun, workers, edge)
 - every POST carries an **Idempotency-Key**, reused across retries
@@ -207,7 +208,3 @@ Add your site's origin under Dashboard → Settings → Checkout so the checkout
 ## License
 
 MIT. The SDK is open source; the Perly Pay service it talks to is not.
-
-## Source
-
-This is the source of the `perly-pay` package on npm, copied from Perly Pay's own repository on each release (paths in comments such as `packages/…` refer to that layout). Issues and pull requests are welcome here.
