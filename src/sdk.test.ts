@@ -242,7 +242,7 @@ describe("credits", () => {
   it("names the customer by id, email or your own id", async () => {
     const { pay: p, calls } = pay([json(200, balance), json(200, balance), json(200, balance), json(200, balance)]);
     await p.credits.balance("cus_0123456789abcdef0123456789abcdef");
-    await p.credits.balance("ada@example.com", { product: "prod_1" });
+    await p.credits.balance({ email: "ada@example.com" }, { product: "prod_1" });
     await p.credits.balance("user_42");
     await p.credits.balance({ external_id: "ada@example.com" });
     expect(calls.map((c) => new URL(c.url).pathname)).toEqual(Array(4).fill("/api/v1/credits/balance"));
@@ -250,6 +250,12 @@ describe("credits", () => {
     expect(query(calls[1])).toEqual({ customer_email: "ada@example.com", product: "prod_1" });
     expect(query(calls[2])).toEqual({ customer_external_id: "user_42" });
     expect(query(calls[3])).toEqual({ customer_external_id: "ada@example.com" });
+  });
+
+  it("reads a bare string with @ as your own id, never as somebody's email (AUTHZ-14)", async () => {
+    const { pay: p, calls } = pay([json(200, balance)]);
+    await p.credits.balance("ada@example.com");
+    expect(query(calls[0])).toEqual({ customer_external_id: "ada@example.com" });
   });
 
   it("consumes in one line, with your idempotency key reused on every retry", async () => {

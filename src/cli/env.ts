@@ -6,6 +6,8 @@
 export const KEY_VAR = "PERLY_PAY_SECRET_KEY";
 export const WEBHOOK_SECRET_VAR = "PERLY_PAY_WEBHOOK_SECRET";
 export const API_VAR = "PERLY_PAY_API";
+/** The site's public address, where buyers come back after paying: the request's Host can be anybody's. */
+export const RETURN_URL_VAR = "PERLY_PAY_RETURN_URL";
 export const DEFAULT_API = "https://pay.perly.io";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -14,12 +16,15 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
  * `--api` as an origin, or null. https, or plain http only to this machine
  * (as perly-pay-mcp's PERLY_PAY_API): init sends the key there, and a key
  * never crosses a network unencrypted. No user name, path, query or fragment,
- * so `https://pay.perly.io@evil.example` cannot pass for Perly Pay.
+ * so `https://pay.perly.io@evil.example` cannot pass for Perly Pay; no space
+ * or line break inside it, which the URL parser would drop without a word.
  */
 export function checkApiOrigin(raw: string): string | null {
+  const text = raw.trim().replace(/\/+$/, "");
+  if (/[\s\p{Cc}]/u.test(text)) return null;
   let url: URL;
   try {
-    url = new URL(raw.trim().replace(/\/+$/, ""));
+    url = new URL(text);
   } catch {
     return null;
   }

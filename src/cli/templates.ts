@@ -11,7 +11,7 @@
  * and the plan in its metadata, read back from `invoice.fulfilled`.
  */
 import type { CodeStyle, Project } from "./detect.js";
-import { API_VAR, KEY_VAR, WEBHOOK_SECRET_VAR } from "./env.js";
+import { API_VAR, KEY_VAR, RETURN_URL_VAR, WEBHOOK_SECRET_VAR } from "./env.js";
 
 export interface Offer {
   /** What the one-off plan is called on the invoice. */
@@ -120,7 +120,8 @@ ${exp}async function createCheckout(plan${t(": string")}, options${t(": { return
     currency,
     description,
     ...(options.email ? { customer: { email: options.email } } : {}),
-    return_url: options.returnUrl,
+    // Your site's own address when set: the request's Host header, which returnUrl comes from, is the sender's to choose.
+    return_url: process.env.${RETURN_URL_VAR} || options.returnUrl,
     metadata: { plan: id, credits: String(credits), ...(options.user ? { user: options.user } : {}) },
   });
 }
@@ -379,24 +380,61 @@ ${head}
 
 const PAGE = ${str(buttonHtml("/perly-pay/checkout"))};
 
-function readBody(req${t(": IncomingMessage")})${t(": Promise<Buffer>")} {
+/** A webhook or the button's form is far smaller; anything bigger is refused before it is kept. */
+const MAX_BODY = 1024 * 1024;
+
+/** The body, or null once it passes MAX_BODY. */
+function readBody(req${t(": IncomingMessage")})${t(": Promise<Buffer | null>")} {
   return new Promise((resolve, reject) => {
     const chunks${t(": Buffer[]")} = [];
-    req.on("data", (chunk${t(": Buffer")}) => chunks.push(chunk));
+    let size = 0;
+    req.on("data", (chunk${t(": Buffer")}) => {
+      size += chunk.length;
+      if (size > MAX_BODY) return resolve(null);
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }
 
-/** Answers /perly-pay, /perly-pay/checkout and /perly-pay/webhook; false for anything else. */
+function tooLarge(req${t(": IncomingMessage")}, res${t(": ServerResponse")}) {
+  res.writeHead(413, { Connection: "close" }).end(() => req.destroy());
+}
+
+/**
+ * Answers /perly-pay, /perly-pay/checkout and /perly-pay/webhook; false for anything else.
+ * A failure answers 500 for that request only (and is logged): your server keeps running.
+ */
 ${exp}async function perlyPayHandler(req${t(": IncomingMessage")}, res${t(": ServerResponse")})${t(": Promise<boolean>")} {
+  try {
+    return await route(req, res);
+  } catch (error) {
+    console.error("[perly-pay]", error);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+    return true;
+  }
+}
+
+async function route(req${t(": IncomingMessage")}, res${t(": ServerResponse")})${t(": Promise<boolean>")} {
+  // "//" and the like are no URL at all: not ours, your routing decides.
+  if (!URL.canParse(req.url ?? "/", "http://localhost")) return false;
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
   if (req.method === "GET" && path === "/perly-pay") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(PAGE);
     return true;
   }
   if (req.method !== "POST" || (path !== "/perly-pay/checkout" && path !== "/perly-pay/webhook")) return false;
+  if (Number(req.headers["content-length"] ?? 0) > MAX_BODY) {
+    tooLarge(req, res);
+    return true;
+  }
   const raw = await readBody(req);
+  if (raw === null) {
+    tooLarge(req, res);
+    return true;
+  }
   if (path === "/perly-pay/webhook") {
     // Perly Pay posts signed events here: add this URL in Dashboard → Developers → Webhooks.
     const signature = req.headers["perly-signature"];
@@ -441,6 +479,8 @@ return [
     'secret_key' => env('${KEY_VAR}'),
     'webhook_secret' => env('${WEBHOOK_SECRET_VAR}'),
     'api' => env('${API_VAR}', 'https://pay.perly.io'),
+    // Your site's public address, where buyers come back after paying. Unset: url('/'), which follows the request's Host.
+    'return_url' => env('${RETURN_URL_VAR}'),
 ];
 `;
   const controller = `<?php
@@ -496,7 +536,7 @@ class PerlyPayController extends Controller
                 'amount' => $plan['amount'],
                 'currency' => $plan['currency'],
                 'description' => $plan['description'],
-                'return_url' => url('/'),
+                'return_url' => (string) (config('perly-pay.return_url') ?: url('/')),
                 'metadata' => $metadata,
             ])
             ->throw()

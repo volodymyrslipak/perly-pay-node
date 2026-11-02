@@ -7,7 +7,7 @@
  * it without a terminal, a browser or a network.
  */
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { PerlyPay } from "../index.js";
 import { PerlyPayError } from "../errors.js";
@@ -16,6 +16,7 @@ import {
   API_VAR,
   DEFAULT_API,
   KEY_VAR,
+  RETURN_URL_VAR,
   WEBHOOK_SECRET_VAR,
   checkApiOrigin,
   checkTestKey,
@@ -277,13 +278,18 @@ async function run(options: InitOptions, io: InitIO, result: InitResult): Promis
   const entries: EnvEntry[] = [
     { name: KEY_VAR, value: key ?? "", comment: `Test key from Dashboard → Developers (sk_test_…). Never commit it.`, replace: source === "--key" || source === "pasted" },
     { name: WEBHOOK_SECRET_VAR, value: webhookSecret ?? "", comment: "Your webhook endpoint's signing secret (whsec_…).", replace: webhookSecret !== null },
+    { name: RETURN_URL_VAR, value: "", comment: "Your site's public address (https://…/), where buyers come back after paying. Empty: the request's own host.", replace: false },
   ];
   if (api !== DEFAULT_API) entries.push({ name: API_VAR, value: api, comment: "Perly Pay's address, when it is not https://pay.perly.io.", replace: true });
   // Never write a key from the shell's environment into a file: it is already where the app reads it.
   if (source === "environment") entries.shift();
   const env = upsertEnv(envText, entries, options.force);
   result.env = env.outcomes;
-  if (!options.dryRun && env.content !== envText) writeFileSync(envPath, env.content);
+  if (!options.dryRun && env.content !== envText) {
+    writeFileSync(envPath, env.content, { mode: 0o600 });
+    // `mode` counts only for a new file: one already there keeps what it had until told.
+    chmodSync(envPath, 0o600);
+  }
 
   const gitignorePath = join(project.dir, ".gitignore");
   const ignored = ensureIgnored(readText(gitignorePath), project.envFile);

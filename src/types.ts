@@ -612,9 +612,9 @@ export interface EntitlementCheckParams {
 }
 
 /**
- * Who holds the credits: a customer id (`cus_…`), an email (has an `@`),
- * or any other string as your own id for them (`external_id`) — or say
- * which with `{ id }`, `{ email }` or `{ external_id }`.
+ * Who holds the credits: a customer id (`cus_…`), or any other string as
+ * your own id for them (`external_id`), even one with an `@` — or say which
+ * with `{ id }`, `{ email }` or `{ external_id }`.
  */
 export type CustomerRef = string | { id: string } | { email: string } | { external_id: string };
 
@@ -633,8 +633,11 @@ export interface CreditConsumeParams extends CreditCustomerParams {
 
 export interface LicenseScope {
   key: string;
+  /** Your product: a key for any other product, or from another account, is refused. Always pass it. */
   product?: string;
   merchant?: string;
+  /** Without `product`, only live keys are checked; `false` checks a test-mode key instead. */
+  livemode?: boolean;
 }
 
 export interface WebhookEndpointCreateParams {

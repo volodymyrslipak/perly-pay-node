@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectProject, installCommand, type Project } from "./detect";
-import { checkTestKey, ensureIgnored, gitignoreIgnores, maskKey, readEnvValue, upsertEnv } from "./env";
+import { checkApiOrigin, checkTestKey, ensureIgnored, gitignoreIgnores, maskKey, readEnvValue, upsertEnv } from "./env";
 import { init, type InitIO, type InitOptions } from "./init";
 import { HELP, main } from "./main";
 import { planFiles, type GeneratedFile } from "./templates";
@@ -197,6 +197,7 @@ describe("init", () => {
     ]);
     expect(read(dir, ".env.local")).toContain(`PERLY_PAY_SECRET_KEY=${TEST_KEY}\n`);
     expect(read(dir, ".env.local")).toContain("PERLY_PAY_WEBHOOK_SECRET=\n");
+    expect(read(dir, ".env.local")).toMatch(/# .*public address.*\nPERLY_PAY_RETURN_URL=\n/);
     expect(result.gitignore).toBe("already ignored");
     expect(result.next.join("\n")).toMatch(/pnpm add perly-pay/);
     expect(result.next.join("\n")).toMatch(/Simulate payment/);
@@ -289,6 +290,24 @@ describe("init", () => {
     const again = await run(dir, { api: "http://localhost:3273", webhookUrl: "http://localhost:4567/perly-pay/webhook" }, io);
     expect(again.result.webhook?.secret).toBe("kept");
     expect(read(dir, ".env")).toContain("PERLY_PAY_WEBHOOK_SECRET=whsec_fresh");
+  });
+
+  it("keeps the keys file to its owner, new or already there (AUTHZ-13)", async () => {
+    const fresh = fixture(FIXTURES.expressEsmYarn);
+    await run(fresh, { key: TEST_KEY });
+    expect(statSync(join(fresh, ".env")).mode & 0o777).toBe(0o600);
+
+    const open = fixture({ ...FIXTURES.expressEsmYarn, ".env": "PORT=3000\n" });
+    chmodSync(join(open, ".env"), 0o644);
+    await run(open, { key: TEST_KEY });
+    expect(statSync(join(open, ".env")).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses a --api that holds a line break or a space, which the URL parser would quietly drop (AUTHZ-13)", () => {
+    for (const api of ["https://pay.\nperly.io", "https://pay.perly.io\nPERLY_PAY_API=https://evil.example", "https://pay.perly\t.io", "https://pay perly.io"]) {
+      expect(checkApiOrigin(api)).toBeNull();
+    }
+    expect(checkApiOrigin("https://pay.perly.io\n")).toBe("https://pay.perly.io");
   });
 
   it("refuses to write a key into a keys file git tracks, before anything is sent or written (SUPPLY3-02)", async () => {
@@ -515,6 +534,16 @@ describe("the generated code", () => {
     expect(core).toContain('import("perly-pay")');
     expect(core).not.toContain('require("perly-pay")');
     expect(core).toContain("module.exports = {");
+  });
+
+  it("sends buyers back to the site's configured address before the request's Host (sdk/template-return-url-from-host)", () => {
+    for (const files of [FIXTURES.nextTsSrcPnpm, FIXTURES.expressEsmYarn, FIXTURES.expressCjs, FIXTURES.honoBun, FIXTURES.node]) {
+      const core = planFiles(project(fixture(files))).files[0]!.content;
+      expect(core).toContain("return_url: process.env.PERLY_PAY_RETURN_URL || options.returnUrl");
+    }
+    const laravel = planFiles(project(fixture(FIXTURES.laravel))).files.map((f) => f.content).join("\n");
+    expect(laravel).toContain("'return_url' => env('PERLY_PAY_RETURN_URL')");
+    expect(laravel).toContain("'return_url' => (string) (config('perly-pay.return_url') ?: url('/'))");
   });
 
   it("checks the signature on the raw body in every framework", () => {

@@ -132,7 +132,11 @@ class Entitlements extends Resource<T.Entitlement, never, never, { customer?: st
   }
 }
 
-/** `cus_…` or a bare uuid is an id; a string with `@` an email; any other string your own id (`external_id`). */
+/**
+ * `cus_…` or a bare uuid is an id; any other string your own id (`external_id`),
+ * `@` or not: a user id that looked like an email must never reach somebody
+ * else's credits by their email. `{ email }` says so outright.
+ */
 export function customerParams(customer: T.CustomerRef): T.CreditCustomerParams {
   if (typeof customer !== "string") {
     if ("id" in customer) return { customer: customer.id };
@@ -140,7 +144,6 @@ export function customerParams(customer: T.CustomerRef): T.CreditCustomerParams 
     return { customer_external_id: customer.external_id };
   }
   if (/^cus_[0-9a-f]{32}$/i.test(customer) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customer)) return { customer };
-  if (customer.includes("@")) return { customer_email: customer };
   return { customer_external_id: customer };
 }
 
