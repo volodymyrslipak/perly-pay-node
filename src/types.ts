@@ -633,11 +633,16 @@ export interface CreditConsumeParams extends CreditCustomerParams {
 
 export interface LicenseScope {
   key: string;
-  /** Your product: a key for any other product, or from another account, is refused. Always pass it. */
+  /** Your product, `prod_…`: a key for any other product, or from another account, is refused. Optional only with a secret key. */
   product?: string;
   merchant?: string;
-  /** Without `product`, only live keys are checked; `false` checks a test-mode key instead. */
+  /** Optional: `true` accepts only a live key, `false` only a test-mode one. */
   livemode?: boolean;
+}
+
+/** A check from your app, without a secret key: `product` is required (the API answers `parameter_missing` without it). */
+export interface PublicLicenseScope extends LicenseScope {
+  product: string;
 }
 
 export interface WebhookEndpointCreateParams {

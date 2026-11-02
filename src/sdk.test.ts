@@ -156,10 +156,31 @@ describe("retries", () => {
 describe("LicenseClient", () => {
   it("calls the public endpoints without any key", async () => {
     const { fn, calls } = fakeFetch([json(200, { object: "license_check", valid: true })]);
-    const r = await new LicenseClient({ baseUrl: "http://pay.test", fetch: fn }).validate({ key: "AAAAA-BBBBB-CCCCC-DDDDD" });
+    const r = await new LicenseClient({ baseUrl: "http://pay.test", fetch: fn }).validate({ key: "AAAAA-BBBBB-CCCCC-DDDDD", product: "prod_1" });
     expect(r.valid).toBe(true);
     expect(calls[0]?.url).toBe("http://pay.test/api/v1/license_keys/validate");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ key: "AAAAA-BBBBB-CCCCC-DDDDD", product: "prod_1" });
     expect(header(calls[0], "Authorization")).toBeUndefined();
+  });
+
+  it("refuses a check without `product` before sending it, as the API would (api/license-public-unscoped)", async () => {
+    const { fn, calls } = fakeFetch([]);
+    const licenses = new LicenseClient({ baseUrl: "http://pay.test", fetch: fn });
+    const key = "AAAAA-BBBBB-CCCCC-DDDDD";
+    for (const call of [
+      // @ts-expect-error product is required
+      () => licenses.validate({ key }),
+      // @ts-expect-error product is required
+      () => licenses.activate({ key, instance_name: "laptop" }),
+      // @ts-expect-error product is required
+      () => licenses.deactivate({ key, instance_name: "laptop" }),
+    ]) {
+      const error = await call().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(InvalidRequestError);
+      expect(error).toMatchObject({ code: "parameter_missing", param: "product" });
+      expect((error as Error).message).toContain("`product`");
+    }
+    expect(calls).toHaveLength(0);
   });
 });
 

@@ -124,7 +124,7 @@ Webhooks `credits.low` (the product's threshold, set in the dashboard) and `cred
 
 ### License keys from your app
 
-Your app never holds a secret key. `LicenseClient` calls the public license endpoints with the buyer's key and your `product` (always pass it: without it a key of any account may answer, live keys only unless `livemode: false`):
+Your app never holds a secret key. `LicenseClient` calls the public license endpoints with the buyer's key and your `product`. `product` is required: without it the call is refused (`InvalidRequestError`, code `parameter_missing`), and a key of any other product or account answers `wrong_product`:
 
 ```ts
 import { LicenseClient } from "perly-pay";
@@ -139,6 +139,9 @@ if (!result.valid) showWhy(result.reason); // "limit_reached", "revoked", "expir
 Every failure throws a `PerlyPayError` (`InvalidRequestError`, `AuthenticationError`,
 `PermissionError`, `RateLimitError`, `IdempotencyError`, `APIError`, `ConnectionError`) carrying the
 API's `type`, `code`, `message`, `param`, the HTTP `status` and the `requestId` to quote to support.
+A call from a place Perly Pay can't be used (pay.perly.io/sanctions) is a `PermissionError` with code
+`region_blocked` and status 451, never retried. A key whose maker left the team, or may no longer manage
+keys, is revoked: `AuthenticationError`, `api_key_invalid`.
 
 ```ts
 try {

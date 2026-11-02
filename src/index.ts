@@ -10,6 +10,7 @@
  * retries); 429 and 5xx are retried with backoff. Webhooks:
  * `pay.webhooks.verify(rawBody, request.headers.get("perly-signature"), secret)`.
  */
+import { InvalidRequestError } from "./errors.js";
 import { Http, SDK_VERSION, type Query, type RequestOptions } from "./http.js";
 import type * as T from "./types.js";
 import * as webhooks from "./webhooks.js";
@@ -256,6 +257,14 @@ class WebhookEndpoints extends Resource<
   rollSecret(id: string, options?: RequestOptions) {
     return this.action(id, "roll_secret", {}, options);
   }
+  /**
+   * Takes this endpoint's delivery of an event once and answers the event; a second claim throws 409
+   * `already_claimed`, an event never sent to this endpoint 404 `not_delivered`. For receivers that run
+   * something per delivery and want a repeated delivery to run nothing.
+   */
+  claim(id: string, params: { event: string }, options?: RequestOptions) {
+    return this.http.request<T.Event>("POST", `${this.path}/${enc(id)}/claim`, params, undefined, options);
+  }
 }
 
 export class PerlyPay {
@@ -335,7 +344,9 @@ export class PerlyPay {
 
 /**
  * License checks from YOUR app (a desktop app, a plugin, a CLI) — no
- * secret key, only the buyer's license key. Never ship a secret key in an app.
+ * secret key, only the buyer's license key and your `product` (required:
+ * without it a key from another account could answer, so the API refuses
+ * the call). Never ship a secret key in an app.
  *
  *   const licenses = new LicenseClient();
  *   const { valid } = await licenses.activate({ key, product: "prod_…", instance_name: os.hostname() });
@@ -353,14 +364,26 @@ export class LicenseClient {
       fetch: fetchImpl,
     });
   }
-  validate(params: T.LicenseScope & { instance?: string; instance_name?: string }) {
-    return this.http.request<T.LicenseCheck>("POST", "/license_keys/validate", params);
+  validate(params: T.PublicLicenseScope & { instance?: string; instance_name?: string }) {
+    return this.check("/license_keys/validate", params);
   }
-  activate(params: T.LicenseScope & { instance_name: string }) {
-    return this.http.request<T.LicenseCheck>("POST", "/license_keys/activate", params);
+  activate(params: T.PublicLicenseScope & { instance_name: string }) {
+    return this.check("/license_keys/activate", params);
   }
-  deactivate(params: T.LicenseScope & ({ instance: string } | { instance_name: string })) {
-    return this.http.request<T.LicenseCheck>("POST", "/license_keys/deactivate", params);
+  deactivate(params: T.PublicLicenseScope & ({ instance: string } | { instance_name: string })) {
+    return this.check("/license_keys/deactivate", params);
+  }
+  /** Without `product` a key from another account could answer, so the API refuses such a check; so does this, before sending it. */
+  private async check(path: string, params: T.PublicLicenseScope): Promise<T.LicenseCheck> {
+    if (!params.product) {
+      throw new InvalidRequestError({
+        type: "invalid_request_error",
+        code: "parameter_missing",
+        message: "Pass `product` (your product's id, `prod_…`) with the license key: without it a key from another account could answer.",
+        param: "product",
+      });
+    }
+    return this.http.request<T.LicenseCheck>("POST", path, params);
   }
 }
 
